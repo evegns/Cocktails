@@ -1,14 +1,20 @@
 import streamlit as st
 import pandas as pd
 from pyairtable import Api
+from pyairtable.api.table import Table
+from requests.exceptions import HTTPError
 
 # =========================
 # CONFIG
 # =========================
 st.set_page_config(page_title="Cocktail Planner", layout="wide")
 
-API_KEY = st.secrets["AIRTABLE_API_KEY"]
-BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
+API_KEY = st.secrets.get("AIRTABLE_API_KEY")
+BASE_ID = st.secrets.get("AIRTABLE_BASE_ID")
+
+if not API_KEY or not BASE_ID:
+    st.error("❌ AIRTABLE_API_KEY ou AIRTABLE_BASE_ID manquant dans les secrets!")
+    st.stop()
 
 api = Api(API_KEY)
 
@@ -25,13 +31,20 @@ TABLES = {
 }
 
 # =========================
-# LOAD DATA (FIX CACHE)
+# LOAD DATA (avec gestion erreurs)
 # =========================
 @st.cache_data(ttl=60)
-def load_table(table_name):
-    table = TABLES[table_name]
-    records = table.all()
-    return pd.DataFrame([r.get("fields", {}) for r in records])
+def load_table(table_name: str) -> pd.DataFrame:
+    table: Table = TABLES[table_name]
+    try:
+        records = table.all()
+        return pd.DataFrame([r.get("fields", {}) for r in records])
+    except HTTPError as e:
+        st.error(f"Erreur HTTP lors du chargement de la table '{table_name}': {e}")
+        return pd.DataFrame()  # retourne vide au lieu de planter
+    except Exception as e:
+        st.error(f"Erreur inattendue pour la table '{table_name}': {e}")
+        return pd.DataFrame()
 
 def load_all():
     data = {}
@@ -57,54 +70,50 @@ if page == "Dashboard":
     st.title("📊 Dashboard")
 
     col1, col2, col3 = st.columns(3)
-
-    col1.metric("Commandes", len(data["Commande"]))
-    col2.metric("Recettes", len(data["Recettes"]))
-    col3.metric("Alcools", len(data["ALCOOL"]))
+    col1.metric("Commandes", len(data.get("Commande", [])))
+    col2.metric("Recettes", len(data.get("Recettes", [])))
+    col3.metric("Alcools", len(data.get("ALCOOL", [])))
 
     st.subheader("Quantités finales")
-
-    if "Quantité finale" in data["Recettes"].columns:
-        st.bar_chart(data["Recettes"]["Quantité finale"])
+    df_recettes = data.get("Recettes", pd.DataFrame())
+    if "Quantité finale" in df_recettes.columns:
+        st.bar_chart(df_recettes["Quantité finale"])
 
 # =========================
 # COMMANDES
 # =========================
 elif page == "Commandes":
     st.title("📦 Commandes")
-
-    st.dataframe(data["Commande"], use_container_width=True)
+    st.dataframe(data.get("Commande", pd.DataFrame()), use_container_width=True)
 
     st.divider()
     st.subheader("➕ Nouvelle commande")
-
     recette = st.text_input("Nom du cocktail")
     nombre = st.number_input("Nombre de cocktails", min_value=1, value=1)
 
     if st.button("Ajouter la commande"):
-        TABLES["Commande"].create({
-            "Recette": recette,
-            "Nombre de cocktails": nombre
-        })
-        st.success("✅ Commande ajoutée")
-        st.cache_data.clear()
+        try:
+            TABLES["Commande"].create({
+                "Recette": recette,
+                "Nombre de cocktails": nombre
+            })
+            st.success("✅ Commande ajoutée")
+            st.cache_data.clear()
+        except HTTPError as e:
+            st.error(f"Erreur HTTP lors de l'ajout: {e}")
 
 # =========================
 # RECETTES
 # =========================
 elif page == "Recettes":
     st.title("🍸 Recettes")
-
-    df = data["Recettes"]
-
+    df = data.get("Recettes", pd.DataFrame())
     if "Cocktails" in df.columns:
         cocktail = st.selectbox(
             "Choisir un cocktail",
             sorted(df["Cocktails"].dropna().unique())
         )
-
         filtered = df[df["Cocktails"] == cocktail]
-
         st.dataframe(filtered, use_container_width=True)
     else:
         st.warning("Colonne 'Cocktails' non trouvée")
@@ -114,12 +123,7 @@ elif page == "Recettes":
 # =========================
 elif page == "Ingrédients":
     st.title("🧪 Ingrédients")
-
-    tabs = st.tabs([
-        "Alcool", "Premix", "Soft",
-        "Garnish", "Verres", "Glace"
-    ])
-
+    tabs = st.tabs(["Alcool", "Premix", "Soft", "Garnish", "Verres", "Glace"])
     tables_map = {
         "Alcool": "ALCOOL",
         "Premix": "PREMIX",
@@ -131,10 +135,8 @@ elif page == "Ingrédients":
 
     for i, (label, key) in enumerate(tables_map.items()):
         with tabs[i]:
-            df = data[key]
-
+            df = data.get(key, pd.DataFrame())
             st.subheader(label)
-
             if "Cumul de Quantité finale" in df.columns:
                 st.dataframe(
                     df.sort_values(
