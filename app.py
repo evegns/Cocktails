@@ -7,8 +7,8 @@ from pyairtable import Api
 # =========================
 st.set_page_config(page_title="Cocktail Planner", layout="wide")
 
-API_KEY = st.secrets.get("AIRTABLE_API_KEY", "YOUR_API_KEY")
-BASE_ID = st.secrets.get("AIRTABLE_BASE_ID", "YOUR_BASE_ID")
+API_KEY = st.secrets["AIRTABLE_API_KEY"]
+BASE_ID = st.secrets["AIRTABLE_BASE_ID"]
 
 api = Api(API_KEY)
 
@@ -25,17 +25,18 @@ TABLES = {
 }
 
 # =========================
-# LOAD DATA
+# LOAD DATA (FIX CACHE)
 # =========================
 @st.cache_data(ttl=60)
-def load_table(table):
+def load_table(table_name):
+    table = TABLES[table_name]
     records = table.all()
-    return pd.DataFrame([r["fields"] for r in records])
+    return pd.DataFrame([r.get("fields", {}) for r in records])
 
 def load_all():
     data = {}
-    for name, table in TABLES.items():
-        data[name] = load_table(table)
+    for name in TABLES.keys():
+        data[name] = load_table(name)
     return data
 
 data = load_all()
@@ -105,7 +106,6 @@ elif page == "Recettes":
         filtered = df[df["Cocktails"] == cocktail]
 
         st.dataframe(filtered, use_container_width=True)
-
     else:
         st.warning("Colonne 'Cocktails' non trouvée")
 
